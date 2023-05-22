@@ -179,6 +179,8 @@ def main(args, rna_dataset):
         sum_reconstr_loss = 0
 
         for batch_idx, (x, y) in enumerate(train_loader):
+            optimizer.zero_grad()
+            
             x, y = x.to(device), y.to(device)
             if x.is_cuda != True:
                 x = x.cuda()
@@ -200,7 +202,6 @@ def main(args, rna_dataset):
             sum_kl_loss += losses['kl_loss']
             sum_reconstr_loss += losses['reconstr_loss']
             
-            optimizer.zero_grad()
             loss.backward(retain_graph=True)
             optimizer.step()
             
