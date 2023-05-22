@@ -21,16 +21,16 @@ from sklearn.pipeline import Pipeline
 
 import wandb
 
-def load_data(num_genes, multivariate):
+def load_data(num_genes, multivariate, train_path, test_path, val_path):
     df_real = pd.read_csv(f'./data/tcga_brca.csv')
     
     df_real_gene_columns = df_real.iloc[:,2:-3].columns
     train_genes = list(df_real_gene_columns)
     gene_names = train_genes
 
-    data_train = np.load('./data/tcga_brca_train.npz', allow_pickle=True)
-    data_val = np.load('./data/tcga_brca_val.npz', allow_pickle=True)
-    data_test = np.load('./data/tcga_brca_test.npz', allow_pickle=True)
+    data_train = np.load(train_path, allow_pickle=True)
+    data_val = np.load(val_path, allow_pickle=True)
+    data_test = np.load(test_path, allow_pickle=True)
 
     data = {'train_set': (data_train['x'], data_train['y']),
             'test_set': (data_test['x'], data_test['y']),
@@ -179,8 +179,6 @@ def main(args, rna_dataset):
         sum_reconstr_loss = 0
 
         for batch_idx, (x, y) in enumerate(train_loader):
-            optimizer.zero_grad()
-            
             x, y = x.to(device), y.to(device)
             if x.is_cuda != True:
                 x = x.cuda()
@@ -202,6 +200,7 @@ def main(args, rna_dataset):
             sum_kl_loss += losses['kl_loss']
             sum_reconstr_loss += losses['reconstr_loss']
             
+            optimizer.zero_grad()
             loss.backward(retain_graph=True)
             optimizer.step()
             
@@ -255,7 +254,7 @@ def main(args, rna_dataset):
         if score > best_score or epoch % 50 == 0:
             best_score = score
             stop_point = initial_stop_point
-            x_syn = save_synthetic(vae, x_syn, Y_test, epoch+1, args.batch_size, args.learning_rate, X.shape[1])
+            x_syn = save_synthetic(vae, x_syn, Y_test, epoch+1, args.batch_size, args.learning_rate, X.shape[1], best_score)
         else:
             stop_point -= 1
         
@@ -340,9 +339,12 @@ if __name__ == '__main__':
     parser.add_argument("--geo", type=int, default=1)
     parser.add_argument("--beta", type=float, default=1) # 0.144
     parser.add_argument("--hidden_dims", type=int, default=3) # 0.144
+    parser.add_argument("--train_path", type=str)
+    parser.add_argument("--test_path", type=str)
+    parser.add_argument("--val_path", type=str)
 
     args = parser.parse_args()
     
-    rna_dataset = load_data(args.num_genes, args.multivariate)
+    rna_dataset = load_data(args.num_genes, args.multivariate, args.train_path, args.test_path, args.val_path)
 
     main(args, rna_dataset)
