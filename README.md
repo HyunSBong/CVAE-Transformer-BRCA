@@ -5,6 +5,9 @@ Overview
 <img width="749" alt="스크린샷 2023-04-02 오후 11 47 58" src="https://user-images.githubusercontent.com/69189272/229360369-fd217d1c-6749-462f-b617-30adc314c4f1.png">
 RNA-seq generation model : (https://github.com/HyunSBong/CVAE-RNA-seq)
 
+Modified it to Pytorch (gene level self-attention)
+- Original moBRCA-net | [Paper](https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-023-05273-5) | [Code](https://github.com/cbi-bioinfo/moBRCA-net)
+
 Dataset
 ----------
 - GTEx(Genotype-Tissue Expression) Dataset
