@@ -3,6 +3,9 @@ import numpy as np
 import pandas as pd
 import os
 import argparse
+import datetime
+from datetime import datetime
+import pickle
 
 import torch
 import torch.nn as nn
@@ -32,8 +35,8 @@ def load_data(train_x, test_x, train_y, test_y, n_gene):
     return dataset
 
 def main(args, dataset):
-    wandb.init(project="moBRCAnet gene level pytorch", reinit=True)
-    wandb.config.update(args)
+    # wandb.init(project="moBRCAnet gene level pytorch", reinit=True)
+    # wandb.config.update(args)
 
     ### GPU 
     os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
@@ -114,8 +117,6 @@ def main(args, dataset):
     max_label = 0
     max_attn_gene = 0
     stop_point = 0
-    
-    # softmax_module.apply(init_weights)
 
     for epoch in range(args.epochs):
         
@@ -160,10 +161,10 @@ def main(args, dataset):
         
         print("Epoch {:02d}/{:02d} Loss {:9.4f}, Accuracy {:9.4f}".format(
             epoch+1, args.epochs, avg_loss, avg_acc))
-        wandb.log({
-            "Loss": avg_loss,
-            "Accuracy": avg_acc,
-        })
+        # wandb.log({
+        #     "Loss": avg_loss,
+        #     "Accuracy": avg_acc,
+        # })
 
         cur_acc = 0
         cur_pred = 0
@@ -190,18 +191,19 @@ def main(args, dataset):
                     cur_label = torch.argmax(y, dim=1)
                     correct_pred = torch.eq(cur_pred, cur_label)
                     accuracy = torch.mean(correct_pred.float())
+                    
+                    sum_loss += loss
+                    sum_acc += accuracy
 
-                sum_loss += loss
                 avg_loss = sum_loss / len(test_loader)
-                cur_acc = sum_acc / len(train_loader)
-                # print(", cur_accr:%.6f," % cur_acc, "Train_batch_accr:%.6f, MAX:%.4f" % (cur_acc, max_accr), end='')
+                cur_acc = sum_acc / len(test_loader)
 
-                wandb.log({
-                    "Test Loss": avg_loss,
-                    "Test Accuracy": cur_acc,
-                })
-                
-        if stop_point > 10:
+                # wandb.log({
+                #     "Test Loss": avg_loss,
+                #     "Test Accuracy": cur_acc,
+                # })
+        print("===> cur_accr:%.6f," % cur_acc, "Train_batch_accr:%.6f, MAX:%.4f" % (avg_acc, max_accr))        
+        if stop_point > 30:
             break
         
         if max_accr > float(cur_acc):
@@ -214,10 +216,19 @@ def main(args, dataset):
             max_attn_gene = cur_attn_gene
         print("")
 
-
-    np.savetxt("./result/" + "prediction.csv", max_pred, fmt="%.0f", delimiter=",")
-    np.savetxt("./result/" + "label.csv", max_label, fmt="%.0f", delimiter=",")
-    np.savetxt("./result/" + "attn_score_gene.csv", max_attn_gene, fmt="%f", delimiter=",")
+    
+    np.savetxt("./results/" + "prediction.csv", max_pred.cpu().numpy(), fmt="%.0f", delimiter=",")
+    np.savetxt("./results/" + "label.csv", max_label.cpu().numpy(), fmt="%.0f", delimiter=",")
+    np.savetxt("./results/" + "attn_score_gene.csv", max_attn_gene.cpu().numpy(), fmt="%f", delimiter=",")
+    
+    date_val = datetime.today().strftime("%Y%m%d%H%M")    
+    file = f'./results/mobrca_gene_{date_val}_accuracy{max_accr}_.pkl'
+    data = {'moBrca': moBrca,
+            'softmax_module': softmax_module,
+            }
+    with open(file, 'wb') as files:
+        pickle.dump(data, files)
+        
     print("ACCURACY : " + str(max_accr))
 
 if __name__ == '__main__':
@@ -242,7 +253,4 @@ if __name__ == '__main__':
     
     dataset = load_data(args.train_x, args.test_x, args.train_y, args.test_y, args.n_gene)
     main(args, dataset)
-     
-        
-
-        
+  
