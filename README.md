@@ -12,11 +12,17 @@ Modified it to Pytorch (gene level self-attention)
 - ![fig1_v7](https://github.com/HyunSBong/CVAE-BRCA/assets/69189272/ea63e488-9f97-4384-a7b0-1bb3e75aa6c1)
 
 
+BRCA_weighted_DEGs.R - Top 1,000 genes with high weights were selected from the miRNA-TF-mRNA gene regulatory networks.
+Reference Statistical Analysis | [Paper](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7644310/)
+- |Subtypes|Basal-like|Her2|LumA|LumB|Normal-like|
+  |---|---|---|---|---|---|
+  |Weighted DEGs|376|157|249|206|249|
+
 Dataset
 ----------
 - GTEx(Genotype-Tissue Expression) Dataset
 - TCGA(Cancer Genome Atlas) Dataset
-- L1000 landmark 
+- L1000 landmark gene set
 - RNA-seq(human transcriptomics) Dataset (9147 samples and 18154 genes)
 - TCGA-BRCA (PAM50)
 
