@@ -2,7 +2,7 @@
 
 Overview
 ----------
-RNA-seq generation model | [Paper] | [Code](https://github.com/HyunSBong/CVAE-RNA-seq)
+RNA-seq generation model | [Paper](https://doi.org/10.5909/JBE.2023.28.3.275) | [Code](https://github.com/HyunSBong/CVAE-RNA-seq)
 - <img width="749" alt="cvae" src="https://github.com/HyunSBong/CVAE-BRCA/assets/69189272/82f10eb6-8cd4-4d3e-acb5-763c43996529">
 ----------
 Modified it to Pytorch (gene level self-attention)
