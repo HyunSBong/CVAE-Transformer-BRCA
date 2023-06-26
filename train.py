@@ -1,55 +1,45 @@
-import os
+import math
 import numpy as np
-import time
-import argparse
 import pandas as pd
-import pickle
-import random
+import os
+import argparse
 import datetime
 from datetime import datetime
-from collections import defaultdict
-from utils import *
-from model import CVAE
+import pickle
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
+from sklearn.metrics import f1_score
+
+from moBRCAnet_gene_pytorch_model import moBRCAnet, SoftmaxClassifier
 
 import wandb
 
-def load_data(num_genes, multivariate, train_path, test_path, val_path):
-    df_real = pd.read_csv(f'./data/tcga_brca.csv')
-    
-    df_real_gene_columns = df_real.iloc[:,2:-3].columns
-    train_genes = list(df_real_gene_columns)
-    gene_names = train_genes
+def load_data(train_x, test_x, train_y, test_y, n_gene):
+    X_train = pd.read_csv(train_x, delimiter=",", dtype=np.float32)
+    X_test = pd.read_csv(test_x, delimiter=",", dtype=np.float32)
+    Y_train = pd.read_csv(train_y, delimiter=",", dtype=np.float32).values
+    Y_test = pd.read_csv(test_y, delimiter=",", dtype=np.float32).values
 
-    data_train = np.load(train_path, allow_pickle=True)
-    data_val = np.load(val_path, allow_pickle=True)
-    data_test = np.load(test_path, allow_pickle=True)
+    X_gene_train = X_train.values
+    X_gene_test = X_test.values
 
-    data = {'train_set': (data_train['x'], data_train['y']),
-            'test_set': (data_test['x'], data_test['y']),
-            'val_set': (data_val['x'], data_val['y']),
-            'gene_names': gene_names
-           }
-    return data
+    n_classes = len(Y_train[1])
+    
+    dataset = {'train_set': (X_train, Y_train),
+               'test_set': (X_test, Y_test),
+               'gene_set': (X_gene_train, X_gene_test),
+               'n_classes': n_classes
+              }
+    return dataset
 
-def main(args, rna_dataset):
-    # wandb
-    wandb.init(project="TGCA BRCA init", reinit=True)
-    wandb.config.update(args)
-    
-    random.seed(args.seed)
-    os.environ['PYTHONHASHSEED'] = str(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    
-    # GPU 
+def main(args, dataset):
+    # wandb.init(project="moBRCAnet gene level pytorch 0626", reinit=True)
+    # wandb.config.update(args)
+
+    ### GPU 
     os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
     os.environ["CUDA_VISIBLE_DEVICES"]= str(args.gpu_id)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -57,294 +47,233 @@ def main(args, rna_dataset):
     print('Current cuda device:', torch.cuda.current_device())
     print('Count of using GPUs:', torch.cuda.device_count())
     
-    # use bernoulli decoder
-    multivariate = False
-    if args.multivariate == 1:
-        # use gaussian decoder
-        multivariate = True
+    # Train/Test dataset
+    (X_train, Y_train) = dataset['train_set']
+    (X_test, Y_test) = dataset['test_set']
+    (X_gene_train, X_gene_test) = dataset['gene_set']
+    n_classes = dataset['n_classes']
     
-    # Train/Test dataset & tissues
-    # X = rna_dataset['X'] # [COL4A1, IFT27,,,].values
-    # Y = rna_dataset['Y'] # [["PAM50"]].values
-    (X_train, Y_train) = rna_dataset['train_set']
-    (X_test, Y_test) = rna_dataset['test_set']
-    (X_val, Y_val) = rna_dataset['val_set']
+    train_labels = Y_train
+    test_labels = Y_test
+    n_classes = len(Y_train[1])
     
-    # Standardization & Normalization data
-    std_scaler = StandardScaler().fit(X_train)
-    X_train = std_scaler.transform(X_train)
-    X_test = std_scaler.transform(X_test)
-    
-    X = X_train
-    
-    gene_names = rna_dataset['gene_names'] # ex) COL4A1, IFT27,,,
-    
-    num_tissue = 5 #len(set(Y)) # 15 (breast, lung, liver 등 15개 tissue)
-    view_size = X.shape[1]
-    
-    Y_train_tissue_datasets = Y_train
-    Y_test_tissue_datasets = Y_test
-    Y_val_tissue_datasets = Y_val
-    
-    # one-hot encoding
-    le = LabelEncoder()
-    le.fit(Y_train_tissue_datasets)
-    train_labels = le.transform(Y_train_tissue_datasets) # bladder,uterus,,, -> 0,14,,,
-    test_labels = le.transform(Y_test_tissue_datasets)
-    val_labels = le.transform(Y_val_tissue_datasets)
-    
-    # DataLoader
+    ### DataLoader
     train_label = torch.as_tensor(train_labels)
-    train = torch.tensor(X_train.astype(np.float32))
+    train = torch.tensor(X_gene_train.astype(np.float32))
     train_tensor = TensorDataset(train, train_label)
     train_loader = DataLoader(dataset=train_tensor, batch_size=args.batch_size, shuffle=True)
 
     test_label = torch.as_tensor(test_labels)
-    test = torch.tensor(X_test.astype(np.float32))
+    test = torch.tensor(X_gene_test.astype(np.float32))
     test_tensor = TensorDataset(test, test_label)
     test_loader = DataLoader(dataset=test_tensor, batch_size=args.batch_size, shuffle=True)
-    
-    val_label = torch.as_tensor(val_labels)
-    val = torch.tensor(X_val.astype(np.float32))
-    val_tensor = TensorDataset(val, val_label)
-    val_loader = DataLoader(dataset=val_tensor, batch_size=args.batch_size, shuffle=True)
-    
-    # loss function
-    mse_criterion = nn.MSELoss(size_average=False, reduction="sum")
-    def loss_fn_gaussian(x, mean, log_var, z_mean, z_sigma, beta):
-        # reconstruction error
-        reconstr_loss = mse_criterion(
-            z_mean, x)
-            
-        # Kullback-Leibler divergence
-        kl_loss = -0.5 * torch.sum(1 + log_var - mean.pow(2) - log_var.exp())
-        # kl_loss *= beta
-        
-        elbo = (reconstr_loss + kl_loss) / x.size(0)
-        
-        return {'elbo': elbo, 'reconstr_loss': reconstr_loss, 'kl_loss': kl_loss}
-    
-    def loss_fn_bernoulli(recon_x, x, mean, log_var):
-        # reconstruction error
-        reconstr_loss = torch.nn.functional.binary_cross_entropy(
-            recon_x.view(-1, view_size), x.view(-1, view_size), reduction='sum')
-        # Kullback-Leibler divergence
-        kl_loss = -0.5 * torch.sum(1 + log_var - mean**2 - log_var.exp())
-        elbo = (reconstr_loss + kl_loss) / x.size(0)
-        
-        return {'elbo': elbo, 'reconstr_loss': reconstr_loss, 'kl_loss': kl_loss}
-    
-    compress_dims = [969, 512, 256]
-    decompress_dims = [256, 512, 969]
-    hidden_dims = args.hidden_dims
-    if hidden_dims == 2:
-        compress_dims = [512, 256]
-        decompress_dims = [256, 512]
-    elif hidden_dims == 3:
-        compress_dims = [969, 512, 256]
-        decompress_dims = [256, 512, 969]
-    elif hidden_dims == 4:
-        compress_dims = [969, 512, 256, 128]
-        decompress_dims = [128, 256, 512, 969]
-    
-    print(compress_dims)
-    print(decompress_dims)
-    vae = CVAE(
-        data_dim=X_train.shape[1],
-        compress_dims=compress_dims,
-        latent_size=args.latent_size,
-        decompress_dims=decompress_dims,
-        conditional=args.conditional,
-        view_size = view_size,
-        multivariate = multivariate,
-        num_labels=num_tissue if args.conditional else 0).to(device)
 
-    optimizer = torch.optim.Adam(vae.parameters(), lr=args.learning_rate)
-    wandb.watch(vae)
+    ### Hyperparameter
+    softmax_hidden = 200 # 200
+    dropout_rate = 0.2
+    ensemble_model_num = 1
+    n_gene = args.n_gene
+    n_sm_out = n_classes
+    n_embedding = args.n_embedding # 128
+    epochs = args.epochs
+    batch_size = args.batch_size
+    learning_rate = args.learning_rate
+    l2scale = args.l2scale
+    fc_output_size = 64
+
+    ### Model
+    moBrca = moBRCAnet(
+        data = X_gene_train,
+        output_size = fc_output_size,
+        n_features = n_gene,
+        n_embedding = n_embedding,
+        dropout_rate = dropout_rate
+    ).to(device)
+
+    if args.multi_omics == False:
+        softmax_module = SoftmaxClassifier(
+            n_embedding = 64,
+            softmax_output = softmax_hidden,
+            n_classes = n_classes,
+            dropout_rate = dropout_rate
+        ).to(device)
+
+    if args.multi_omics == True:
+        softmax_module = SoftmaxClassifier(
+            n_embedding = 128,
+            softmax_output = softmax_hidden,
+            n_classes = n_classes,
+            dropout_rate = dropout_rate
+        ).to(device)
+
+    print(moBrca)
+    print(softmax_module)
+
+    ### loss, optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(moBrca.parameters(), lr=args.learning_rate)
     
-    # Train
-    stop_point = 10
-    best_score = 0.0000000000001
-    initial_stop_point = stop_point
-    stop_point_done = False
-    losses = []
+    max_accr = 0
+    max_pred = 0
+    max_label = 0
+    max_attn_gene = 0
+    stop_point = 0
     
-    score = 0
-    beta = args.beta
+    # softmax_module.apply(init_weights)
 
     for epoch in range(args.epochs):
-        train_loss = 0
-        sum_elbo = 0
-        sum_kl_loss = 0
-        sum_reconstr_loss = 0
-
+        
+        sum_loss = 0
+        sum_acc = 0
+        sum_f1 = 0
+        
         for batch_idx, (x, y) in enumerate(train_loader):
+            optimizer.zero_grad()
+            
             x, y = x.to(device), y.to(device)
             if x.is_cuda != True:
                 x = x.cuda()
 
-            if args.conditional and multivariate:
-                mean, log_var, z_mean, z_sigma = vae(x, y)
-                losses = loss_fn_gaussian(x, mean, log_var, z_mean, z_sigma, beta)
-            elif args.conditional and multivariate==False:
-                recon_x, mean, log_var, z = vae(x, y)
-                losses = loss_fn_bernoulli(recon_x, x, mean, log_var)
-            else:
-                recon_x, mean, log_var, z = vae(x)
-                losses = loss_fn_bernoulli(recon_x, x, mean, log_var)
+            rep_gene, _ = moBrca(x)
+
+            if args.multi_omics == False:
+                outputs = softmax_module(rep_gene)
+
+            if args.multi_omics == False:
+                outputs = softmax_module(rep_gene)
+
+            # print(f"output : {torch.argmax(outputs, dim=1)}")
+            # print(f"output shape : {outputs.shape}")
+            # print(f"y : {y}")
+            # print(f"y shape : {y.shape}")
+            loss = criterion(outputs, y)
+            loss = torch.mean(loss)
             
-            loss = losses['elbo'].clone() #  KL-Divergence + reconstruction error / x.size(0)
-            train_loss += loss
+            pred = torch.argmax(outputs, dim=1)
+            label = torch.argmax(y, dim=1)
+            correct_pred = torch.eq(pred, label)
+            accuracy = torch.mean(correct_pred.float())
             
-            sum_elbo += losses['elbo']
-            sum_kl_loss += losses['kl_loss']
-            sum_reconstr_loss += losses['reconstr_loss']
+            pred_cpu = pred.cpu().numpy()
+            label_cpu = label.cpu().numpy()
+            f1 = f1_score(label_cpu, pred_cpu, average='weighted')
             
-            optimizer.zero_grad()
+            sum_loss += loss
+            sum_acc += accuracy
+            sum_f1 += f1
+            
             loss.backward(retain_graph=True)
             optimizer.step()
+        
+        avg_loss = sum_loss / len(train_loader)
+        avg_acc = sum_acc / len(train_loader)
+        avg_f1 = sum_f1 / len(train_loader)
+        
+        print("Epoch {:02d}/{:02d} Loss {:9.4f}, Accuracy {:9.4f}, weighted F1 {:9.4f}".format(
+            epoch+1, args.epochs, avg_loss, avg_acc, avg_f1))
+        # wandb.log({
+        #     "Loss": avg_loss,
+        #     "Accuracy": avg_acc,
+        #     "F1-score": avg_f1,
+        # })
+
+        cur_acc = 0
+        cur_pred = 0
+        cur_label = 0
+        cur_attn_gene = 0
+        cur_f1 = 0
+
+        with torch.no_grad():
+            for epoch in range(args.epochs):
+                total_correct = 0
+                total_samples = 0
+                sum_loss = 0
+                sum_acc = 0
+                sum_f1 = 0
+                
+                for batch_idx, (x, y) in enumerate(test_loader):
+                    x, y = x.to(device), y.to(device)
+                    if x.is_cuda != True:
+                        x = x.cuda()
+
+                    rep_gene, cur_attn_gene = moBrca(x)
+                    outputs = softmax_module(rep_gene)
+
+                    loss =  criterion(outputs, y)
+                    cur_pred = torch.argmax(outputs, dim=1)
+                    cur_label = torch.argmax(y, dim=1)
+                    correct_pred = torch.eq(cur_pred, cur_label)
+                    accuracy = torch.mean(correct_pred.float())
+                    
+                    pred_cpu = pred.cpu().numpy()
+                    label_cpu = label.cpu().numpy()
+                    f1 = f1_score(label_cpu, pred_cpu, average='weighted')
+                    
+                    sum_loss += loss
+                    sum_acc += accuracy
+                    sum_f1 += f1
+
+                avg_loss = sum_loss / len(test_loader)
+                cur_acc = sum_acc / len(test_loader)
+                cur_f1 = sum_f1 / len(test_loader)
+
+                # wandb.log({
+                #     "Test Loss": avg_loss,
+                #     "Test Accuracy": cur_acc,
+                #     "Test F1-score": cur_f1,
+                # })
+        print("===> cur_accr:%.6f," % cur_acc, "weighted_f1:%.6f," % cur_f1, "Train_batch_accr:%.6f, MAX:%.4f" % (avg_acc, max_accr))        
+        if stop_point > 30:
+            break
+        
+        if max_accr > float(cur_acc):
+            stop_point += 1
             
-            if batch_idx % 100 == 0:
-                with torch.no_grad():
-                    for epoch_v in range(args.epochs):
-                        test_loss = 0
-                        sum_elbo = 0
-                        sum_kl_loss = 0
-                        sum_reconstr_loss = 0
+        if max_accr < float(cur_acc):
+            max_accr = cur_acc
+            max_pred = cur_pred
+            max_label = cur_label
+            max_attn_gene = cur_attn_gene
+        print("")
 
-                        for batch_idx, (x, y) in enumerate(val_loader):
-                            x, y = x.to(device), y.to(device)
-                            if x.is_cuda != True:
-                                x = x.cuda()
-
-                            if args.conditional and multivariate:
-                                mean, log_var, z_mean, z_sigma = vae(x, y)
-                                losses = loss_fn_gaussian(x, mean, log_var, z_mean, z_sigma, beta)
-                            elif args.conditional and multivariate==False:
-                                recon_x, mean, log_var, z = vae(x, y)
-                                losses = loss_fn_bernoulli(recon_x, x, mean, log_var)
-                            else:
-                                recon_x, mean, log_var, z = vae(x)
-                                losses = loss_fn_bernoulli(recon_x, x, mean, log_var)
-
-                            loss = losses['elbo'].clone() #  KL-Divergence + reconstruction error / x.size(0)
-                            test_loss += loss
-
-                            sum_elbo += losses['elbo']
-                            sum_kl_loss += losses['kl_loss']
-                            sum_reconstr_loss += losses['reconstr_loss']
-
-                        avg_val_loss = sum_elbo / len(val_loader)
-                        avg_kl_loss = sum_kl_loss / len(val_loader)
-                        avg_reconstr_loss = sum_reconstr_loss / len(val_loader)
-
-                        # print("Epoch {:02d}/{:02d} Test Loss {:9.4f}, KL {:9.4f}, Reconstruction {:9.4f}".format(
-                        #     epoch, args.epochs, avg_val_loss, avg_kl_loss, avg_reconstr_loss))
-
-                        wandb.log({
-                            "ELBO Validation Loss": avg_val_loss,
-                            # "Reconstruction Error": avg_reconstr_loss,
-                            # "KL-Divergence": avg_kl_loss
-                        })
-
-        print(f'stop point : {stop_point}')
-        c = torch.from_numpy(test_labels) # le.fit_transform(Y_train_tissues)
-        x_syn = vae.inference(n=c.size(0), c=c)
-        score = score_fn(X_test, x_syn.detach().cpu().numpy())
-        if score > best_score or epoch % 50 == 0:
-            best_score = score
-            stop_point = initial_stop_point
-            x_syn = save_synthetic(vae, x_syn, Y_test, epoch+1, args.batch_size, args.learning_rate, X.shape[1], best_score)
-        else:
-            stop_point -= 1
+    
+    np.savetxt("./results/" + "prediction.csv", max_pred.cpu().numpy(), fmt="%.0f", delimiter=",")
+    np.savetxt("./results/" + "label.csv", max_label.cpu().numpy(), fmt="%.0f", delimiter=",")
+    np.savetxt("./results/" + "attn_score_gene.csv", max_attn_gene.cpu().numpy(), fmt="%f", delimiter=",")
+    
+    date_val = datetime.today().strftime("%Y%m%d%H%M")    
+    file = f'./results/mobrca_gene_{date_val}_accuracy{max_accr}_.pkl'
+    data = {'moBrca': moBrca,
+            'softmax_module': softmax_module,
+            }
+    with open(file, 'wb') as files:
+        pickle.dump(data, files)
         
-        avg_loss = sum_elbo / len(train_loader)
-        avg_kl_loss = sum_kl_loss / len(train_loader)
-        avg_reconstr_loss = sum_reconstr_loss / len(train_loader)
-        
-        print(f'beta : {beta}')
-        print("Epoch {:02d}/{:02d} Loss {:9.4f}, KL {:9.4f}, Reconstruction {:9.4f}".format(
-            epoch+1, args.epochs, avg_loss, avg_kl_loss, avg_reconstr_loss))
-        print(f'==>Gamma Score : {score}')
-        wandb.log({
-            "ELBO Loss": avg_loss,
-            "Reconstruction Error": avg_reconstr_loss,
-            "KL-Divergence": avg_kl_loss,
-            "Gamma_Score": score,
-            # "beta": beta
-        })
-        
-            
-
-    with torch.no_grad():
-        for epoch in range(args.epochs):
-            test_loss = 0
-            sum_elbo = 0
-            sum_kl_loss = 0
-            sum_reconstr_loss = 0
-
-            for batch_idx, (x, y) in enumerate(test_loader):
-                x, y = x.to(device), y.to(device)
-                if x.is_cuda != True:
-                    x = x.cuda()
-
-                if args.conditional and multivariate:
-                    mean, log_var, z_mean, z_sigma = vae(x, y)
-                    losses = loss_fn_gaussian(x, mean, log_var, z_mean, z_sigma, beta)
-                elif args.conditional and multivariate==False:
-                    recon_x, mean, log_var, z = vae(x, y)
-                    losses = loss_fn_bernoulli(recon_x, x, mean, log_var)
-                else:
-                    recon_x, mean, log_var, z = vae(x)
-                    losses = loss_fn_bernoulli(recon_x, x, mean, log_var)
-
-                loss = losses['elbo'].clone() #  KL-Divergence + reconstruction error / x.size(0)
-                test_loss += loss
-
-                sum_elbo += losses['elbo']
-                sum_kl_loss += losses['kl_loss']
-                sum_reconstr_loss += losses['reconstr_loss']
-
-            avg_val_loss = sum_elbo / len(test_loader)
-            avg_kl_loss = sum_kl_loss / len(test_loader)
-            avg_reconstr_loss = sum_reconstr_loss / len(test_loader)
-
-            print("Epoch {:02d}/{:02d} Test Loss {:9.4f}, KL {:9.4f}, Reconstruction {:9.4f}".format(
-                epoch, args.epochs, avg_val_loss, avg_kl_loss, avg_reconstr_loss))
-
-            wandb.log({
-                "ELBO Test Loss": avg_val_loss,
-                # "Reconstruction Error": avg_reconstr_loss,
-                # "KL-Divergence": avg_kl_loss
-            })
-
-    x_syn = save_synthetic(vae, x, Y_test, args.epochs, args.batch_size, args.learning_rate, X.shape[1])
-    # draw_umap(X_test, x_syn, Y_test_tissues, Y_test_datasets)
+    print("ACCURACY : " + str(max_accr))
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
+    parser.add_argument("--gpu_id",type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--epochs", type=int, default=1300)
-    parser.add_argument("--batch_size", type=int, default=50)
-    parser.add_argument("--learning_rate", type=float, default=1e-04) # bernoulli 0.001
+    parser.add_argument("--epochs", type=int, default=8000)
+    parser.add_argument("--batch_size", type=int, default=136)
+    parser.add_argument("--learning_rate", type=float, default=1e-2)
     parser.add_argument("--l2scale",type=float, default=0.00001)
-    parser.add_argument("--compress_dims", type=list, default=[1000, 512, 256])
-    parser.add_argument("--decompress_dims", type=list, default=[256, 512, 1000])
-    parser.add_argument("--latent_size", type=int, default=50)
-    parser.add_argument("--conditional", action='store_true', default=True)
-    parser.add_argument("--gpu_id", type=int, default=2)
-    parser.add_argument("--num_genes", type=int, default=18154)
-    parser.add_argument("--multivariate", type=int, default=1)
-    parser.add_argument("--geo", type=int, default=1)
-    parser.add_argument("--beta", type=float, default=1) # 0.144
-    parser.add_argument("--hidden_dims", type=int, default=3) # 0.144
-    parser.add_argument("--train_path", type=str)
-    parser.add_argument("--test_path", type=str)
-    parser.add_argument("--val_path", type=str)
-
+    parser.add_argument("--n_embedding",type=int, default=128)
+    parser.add_argument("--fc_output",type=int, default=64)
+    parser.add_argument("--n_gene",type=int, default=352)
+    parser.add_argument("--multi_omics", type=lambda s: s. lower() in ['true', '1'], default=False)
+    parser.add_argument("--train_x",type=str)
+    parser.add_argument("--test_x",type=str)
+    parser.add_argument("--train_y",type=str)
+    parser.add_argument("--test_y",type=str)
+    
     args = parser.parse_args()
     
-    rna_dataset = load_data(args.num_genes, args.multivariate, args.train_path, args.test_path, args.val_path)
+    dataset = load_data(args.train_x, args.test_x, args.train_y, args.test_y, args.n_gene)
+    main(args, dataset)
+     
+        
 
-    main(args, rna_dataset)
+        
