@@ -10,6 +10,9 @@ Modified it to Pytorch (gene level self-attention)
 - Original moBRCA-net | [Paper](https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-023-05273-5) | [Code](https://github.com/cbi-bioinfo/moBRCA-net)
 - ![fig1_v7](https://github.com/HyunSBong/CVAE-BRCA/assets/69189272/ea63e488-9f97-4384-a7b0-1bb3e75aa6c1)
 ----------
+Attention-based architecture for diagnosis and prognosis from omics data | [Code](https://github.com/HyunSBong/CVAE-BRCA/tree/main/AttOmics)
+- <img width="749" alt="bio" src="https://github.com/HyunSBong/CVAE-BRCA/assets/69189272/9b219e98-e803-4210-9a04-2dee076ba71c">
+----------
 BRCA_weighted_DEGs.R - Top 1,000 genes with high weights were selected from the miRNA-TF-mRNA gene regulatory networks.
 - Reference Statistical Analysis | [Paper](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7644310/)
 - |Subtypes|Basal-like|Her2|LumA|LumB|Normal-like|
