@@ -1,4 +1,4 @@
-# CVAE-BRCA
+# CVAE-Transformer-BRCA
 
 Overview
 ----------
